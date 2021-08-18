@@ -395,7 +395,7 @@ class MirrorNet(BaseDecodeHead):
         layer4_predict = self.layer4_predict(cbam_4)
 
         if layer4_predict.size(1) > 1:
-            layer4_map = torch.sum(layer4_predict, dim=1, keepdim=True)
+            layer4_map = torch.sum(layer4_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer4_map = layer4_predict
         layer4_map = F.sigmoid(layer4_map)
@@ -406,7 +406,7 @@ class MirrorNet(BaseDecodeHead):
         layer3_predict = self.layer3_predict(cbam_3)
 
         if layer3_predict.size(1) > 1:
-            layer3_map = torch.sum(layer3_predict, dim=1, keepdim=True)
+            layer3_map = torch.sum(layer3_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer3_map = layer3_predict
         layer3_map = F.sigmoid(layer3_map)
@@ -417,7 +417,7 @@ class MirrorNet(BaseDecodeHead):
         layer2_predict = self.layer2_predict(cbam_2)
 
         if layer2_predict.size(1) > 1:
-            layer2_map = torch.sum(layer2_predict, dim=1, keepdim=True)
+            layer2_map = torch.sum(layer2_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer2_map = layer2_predict
         layer2_map = F.sigmoid(layer2_map)
@@ -427,7 +427,6 @@ class MirrorNet(BaseDecodeHead):
         cbam_1 = self.cbam_1(up_1)
         layer1_predict = self.layer1_predict(cbam_1)
 
-        # TODO:
         out = []
         for layer in [
                 layer4_predict, layer3_predict, layer2_predict, layer1_predict
