@@ -343,6 +343,11 @@ class RandomFlip(object):
                 # use copy() to make numpy stride positive
                 results[key] = mmcv.imflip(
                     results[key], direction=results['flip_direction']).copy()
+            # flip depth
+            for key in results.get('depth_fields', []):
+                # use copy() to make numpy stride positive
+                results[key] = mmcv.imflip(
+                    results[key], direction=results['flip_direction']).copy()
         return results
 
     def __repr__(self):
@@ -399,6 +404,13 @@ class Pad(object):
                 shape=results['pad_shape'][:2],
                 pad_val=self.seg_pad_val)
 
+    def _pad_depth(self, results):
+        for key in results.get('depth_fields', []):
+            results[key] = mmcv.impad(
+                results[key],
+                shape=results['pad_shape'][:2],
+                pad_val=self.seg_pad_val)
+
     def __call__(self, results):
         """Call function to pad images, masks, semantic segmentation maps.
 
@@ -411,6 +423,7 @@ class Pad(object):
 
         self._pad_img(results)
         self._pad_seg(results)
+        self._pad_depth(results)
         return results
 
     def __repr__(self):
@@ -459,6 +472,38 @@ class Normalize(object):
         repr_str = self.__class__.__name__
         repr_str += f'(mean={self.mean}, std={self.std}, to_rgb=' \
                     f'{self.to_rgb})'
+        return repr_str
+
+
+@PIPELINES.register_module()
+class NormalizeDepth(object):
+
+    def __init__(self, mean, std):
+        self.mean = np.array(mean, dtype=np.float32)
+        self.std = np.array(std, dtype=np.float32)
+
+    def __call__(self, results):
+        """Call function to normalize images.
+
+        Args:
+            results (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Normalized results, 'img_norm_cfg' key is added into
+                result dict.
+        """
+
+        if 'depth_map' not in results:
+            return results
+
+        results['depth_map'] = mmcv.imnormalize(results['depth_map'],
+                                                self.mean, self.std)
+        results['depth_norm_cfg'] = dict(mean=self.mean, std=self.std)
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(mean={self.mean}, std={self.std}, '
         return repr_str
 
 
@@ -618,6 +663,8 @@ class RandomCrop(object):
 
         # crop semantic seg
         for key in results.get('seg_fields', []):
+            results[key] = self.crop(results[key], crop_bbox)
+        for key in results.get('depth_fields', []):
             results[key] = self.crop(results[key], crop_bbox)
 
         return results

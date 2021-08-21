@@ -57,9 +57,20 @@ class DistEvalHook(_DistEvalHook):
 
     greater_keys = ['mIoU', 'mAcc', 'aAcc']
 
-    def __init__(self, *args, by_epoch=False, efficient_test=False, **kwargs):
+    def __init__(self,
+                 *args,
+                 by_epoch=False,
+                 efficient_test=False,
+                 do_vis=False,
+                 vis_cfg=None,
+                 **kwargs):
         super().__init__(*args, by_epoch=by_epoch, **kwargs)
         self.efficient_test = efficient_test
+        self.do_vis = do_vis
+        self.vis_cfg = vis_cfg
+
+    def _do_vis(self, results, runner):
+        self.dataloader.dataset.vis_results(runner, results, self.vis_cfg)
 
     def _do_evaluate(self, runner):
         """perform evaluation and save ckpt."""
@@ -95,5 +106,7 @@ class DistEvalHook(_DistEvalHook):
             runner.log_buffer.output['eval_iter_num'] = len(self.dataloader)
             key_score = self.evaluate(runner, results)
 
+            if self.do_vis:
+                self._do_vis(results, runner)
             if self.save_best:
                 self._save_ckpt(runner, key_score)

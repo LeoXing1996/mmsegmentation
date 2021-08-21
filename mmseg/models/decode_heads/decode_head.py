@@ -61,6 +61,7 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  ignore_index=255,
                  sampler=None,
                  align_corners=False,
+                 with_depth=False,
                  init_cfg=dict(
                      type='Normal', std=0.01, override=dict(name='conv_seg'))):
         super(BaseDecodeHead, self).__init__(init_cfg)
@@ -86,6 +87,7 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             self.dropout = None
         self.fp16_enabled = False
+        self.with_depth = with_depth
 
     def extra_repr(self):
         """Extra repr."""
@@ -165,7 +167,12 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """Placeholder of forward function."""
         pass
 
-    def forward_train(self, inputs, img_metas, gt_semantic_seg, train_cfg):
+    def forward_train(self,
+                      inputs,
+                      img_metas,
+                      gt_semantic_seg,
+                      train_cfg,
+                      depth=None):
         """Forward function for training.
         Args:
             inputs (list[Tensor]): List of multi-level img features.
@@ -181,11 +188,14 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        seg_logits = self.forward(inputs)
+        if self.with_depth:
+            seg_logits = self.forward(inputs, depth)
+        else:
+            seg_logits = self.forward(inputs)
         losses = self.losses(seg_logits, gt_semantic_seg)
         return losses
 
-    def forward_test(self, inputs, img_metas, test_cfg):
+    def forward_test(self, inputs, img_metas, test_cfg, depth=None):
         """Forward function for testing.
 
         Args:
@@ -200,6 +210,8 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             Tensor: Output segmentation map.
         """
+        if self.with_depth:
+            return self.forward(inputs, depth)
         return self.forward(inputs)
 
     def cls_seg(self, feat):

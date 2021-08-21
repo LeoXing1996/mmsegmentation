@@ -1,3 +1,4 @@
+from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -43,6 +44,18 @@ class EncoderDecoder(BaseSegmentor):
 
         assert self.with_decode_head
 
+        self.init_ema_model()
+
+    def init_ema_model(self):
+        # TODO:
+        use_ema = self.train_cfg.get('use_ema', False)
+        self.use_ema = use_ema
+        if use_ema:
+            self.backbone_ema = deepcopy(self.backbone)
+            self.decode_head_ema = deepcopy(self.decode_head)
+            if hasattr(self, 'neck'):
+                self.neck_ema = deepcopy(self.neck)
+
     def _init_decode_head(self, decode_head):
         """Initialize ``decode_head``"""
         self.decode_head = builder.build_head(decode_head)
@@ -66,11 +79,11 @@ class EncoderDecoder(BaseSegmentor):
             x = self.neck(x)
         return x
 
-    def encode_decode(self, img, img_metas):
+    def encode_decode(self, img, img_metas, depth=None):
         """Encode images with backbone and decode into a semantic segmentation
         map of the same size as input."""
         x = self.extract_feat(img)
-        out = self._decode_head_forward_test(x, img_metas)
+        out = self._decode_head_forward_test(x, img_metas, depth)
         out = resize(
             input=out,
             size=img.shape[2:],
@@ -78,24 +91,26 @@ class EncoderDecoder(BaseSegmentor):
             align_corners=self.align_corners)
         return out
 
-    def _decode_head_forward_train(self, x, img_metas, gt_semantic_seg):
+    def _decode_head_forward_train(self, x, img_metas, gt_semantic_seg, depth):
         """Run forward function and calculate loss for decode head in
         training."""
         losses = dict()
         loss_decode = self.decode_head.forward_train(x, img_metas,
                                                      gt_semantic_seg,
-                                                     self.train_cfg)
+                                                     self.train_cfg, depth)
 
         losses.update(add_prefix(loss_decode, 'decode'))
         return losses
 
-    def _decode_head_forward_test(self, x, img_metas):
+    def _decode_head_forward_test(self, x, img_metas, depth):
         """Run forward function and calculate loss for decode head in
         inference."""
-        seg_logits = self.decode_head.forward_test(x, img_metas, self.test_cfg)
+        seg_logits = self.decode_head.forward_test(x, img_metas, self.test_cfg,
+                                                   depth)
         return seg_logits
 
-    def _auxiliary_head_forward_train(self, x, img_metas, gt_semantic_seg):
+    def _auxiliary_head_forward_train(self, x, img_metas, gt_semantic_seg,
+                                      depth_map):
         """Run forward function and calculate loss for auxiliary head in
         training."""
         losses = dict()
@@ -103,22 +118,22 @@ class EncoderDecoder(BaseSegmentor):
             for idx, aux_head in enumerate(self.auxiliary_head):
                 loss_aux = aux_head.forward_train(x, img_metas,
                                                   gt_semantic_seg,
-                                                  self.train_cfg)
+                                                  self.train_cfg, depth_map)
                 losses.update(add_prefix(loss_aux, f'aux_{idx}'))
         else:
             loss_aux = self.auxiliary_head.forward_train(
-                x, img_metas, gt_semantic_seg, self.train_cfg)
+                x, img_metas, gt_semantic_seg, self.train_cfg, depth_map)
             losses.update(add_prefix(loss_aux, 'aux'))
 
         return losses
 
-    def forward_dummy(self, img):
+    def forward_dummy(self, img, depth=None):
         """Dummy forward function."""
-        seg_logit = self.encode_decode(img, None)
+        seg_logit = self.encode_decode(img, None, depth)
 
         return seg_logit
 
-    def forward_train(self, img, img_metas, gt_semantic_seg):
+    def forward_train(self, img, img_metas, gt_semantic_seg, depth_map=None):
         """Forward function for training.
 
         Args:
@@ -140,18 +155,19 @@ class EncoderDecoder(BaseSegmentor):
         losses = dict()
 
         loss_decode = self._decode_head_forward_train(x, img_metas,
-                                                      gt_semantic_seg)
+                                                      gt_semantic_seg,
+                                                      depth_map)
         losses.update(loss_decode)
 
         if self.with_auxiliary_head:
             loss_aux = self._auxiliary_head_forward_train(
-                x, img_metas, gt_semantic_seg)
+                x, img_metas, gt_semantic_seg, depth_map)
             losses.update(loss_aux)
 
         return losses
 
     # TODO refactor
-    def slide_inference(self, img, img_meta, rescale):
+    def slide_inference(self, img, img_meta, rescale, depth):
         """Inference by sliding-window with overlap.
 
         If h_crop > h_img or w_crop > w_img, the small patch will be used to
@@ -175,7 +191,7 @@ class EncoderDecoder(BaseSegmentor):
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 crop_img = img[:, :, y1:y2, x1:x2]
-                crop_seg_logit = self.encode_decode(crop_img, img_meta)
+                crop_seg_logit = self.encode_decode(crop_img, img_meta, depth)
                 preds += F.pad(crop_seg_logit,
                                (int(x1), int(preds.shape[3] - x2), int(y1),
                                 int(preds.shape[2] - y2)))
@@ -196,10 +212,10 @@ class EncoderDecoder(BaseSegmentor):
                 warning=False)
         return preds
 
-    def whole_inference(self, img, img_meta, rescale):
+    def whole_inference(self, img, img_meta, rescale, depth):
         """Inference with full image."""
 
-        seg_logit = self.encode_decode(img, img_meta)
+        seg_logit = self.encode_decode(img, img_meta, depth)
         if rescale:
             # support dynamic shape for onnx
             if torch.onnx.is_in_onnx_export():
@@ -215,7 +231,7 @@ class EncoderDecoder(BaseSegmentor):
 
         return seg_logit
 
-    def inference(self, img, img_meta, rescale):
+    def inference(self, img, img_meta, rescale, depth):
         """Inference with slide/whole style.
 
         Args:
@@ -234,10 +250,14 @@ class EncoderDecoder(BaseSegmentor):
         assert self.test_cfg.mode in ['slide', 'whole']
         ori_shape = img_meta[0]['ori_shape']
         assert all(_['ori_shape'] == ori_shape for _ in img_meta)
+
+        if depth is not None and isinstance(depth, list):
+            depth = depth[0]
+
         if self.test_cfg.mode == 'slide':
-            seg_logit = self.slide_inference(img, img_meta, rescale)
+            seg_logit = self.slide_inference(img, img_meta, rescale, depth)
         else:
-            seg_logit = self.whole_inference(img, img_meta, rescale)
+            seg_logit = self.whole_inference(img, img_meta, rescale, depth)
         output = F.softmax(seg_logit, dim=1)
         flip = img_meta[0]['flip']
         if flip:
@@ -250,9 +270,9 @@ class EncoderDecoder(BaseSegmentor):
 
         return output
 
-    def simple_test(self, img, img_meta, rescale=True):
+    def simple_test(self, img, img_meta, rescale=True, depth_map=None):
         """Simple test with single image."""
-        seg_logit = self.inference(img, img_meta, rescale)
+        seg_logit = self.inference(img, img_meta, rescale, depth=depth_map)
         seg_pred = seg_logit.argmax(dim=1)
         if torch.onnx.is_in_onnx_export():
             # our inference backend only support 4D output
@@ -263,7 +283,7 @@ class EncoderDecoder(BaseSegmentor):
         seg_pred = list(seg_pred)
         return seg_pred
 
-    def aug_test(self, imgs, img_metas, rescale=True):
+    def aug_test(self, imgs, img_metas, rescale=True, depth_map=None):
         """Test with augmentations.
 
         Only rescale=True is supported.
@@ -271,9 +291,11 @@ class EncoderDecoder(BaseSegmentor):
         # aug_test rescale all imgs back to ori_shape for now
         assert rescale
         # to save memory, we get augmented seg logit inplace
-        seg_logit = self.inference(imgs[0], img_metas[0], rescale)
+        seg_logit = self.inference(
+            imgs[0], img_metas[0], rescale, depth=depth_map)
         for i in range(1, len(imgs)):
-            cur_seg_logit = self.inference(imgs[i], img_metas[i], rescale)
+            cur_seg_logit = self.inference(
+                imgs[i], img_metas[i], rescale, depth=depth_map)
             seg_logit += cur_seg_logit
         seg_logit /= len(imgs)
         seg_pred = seg_logit.argmax(dim=1)

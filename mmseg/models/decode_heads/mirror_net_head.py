@@ -106,11 +106,6 @@ def logsumexp_2d(tensor):
 class ChannelPool(nn.Module):
 
     def forward(self, x):
-        # original
-        # return torch.cat((torch.max(x, 1)[0].unsqueeze(1), torch.mean(x, 1).unsqueeze(1)), dim=1)
-        # max
-        # torch.max(x, 1)[0].unsqueeze(1)
-        # avg
         return torch.mean(x, 1).unsqueeze(1)
 
 
@@ -379,12 +374,40 @@ class MirrorNet(BaseDecodeHead):
             loss[f'acc_seg_{4-level}'] = accuracy(logit, seg_label)
         return loss
 
-    def forward_train(self, inputs, img_metas, gt_semantic_seg, train_cfg):
+    def forward_train(self,
+                      inputs,
+                      img_metas,
+                      gt_semantic_seg,
+                      train_cfg,
+                      depth=None):
 
         # focus return intermedia in this loss
+        if depth is not None:
+            print(depth.shape)
+            print('get depth map successfully')
         seg_logits = self.forward(inputs, return_intermedia=True)
         losses = self.losses(seg_logits, gt_semantic_seg)
         return losses
+
+    def forward_test(self, inputs, img_metas, test_cfg, depth=None):
+        """Forward function for testing.
+
+        Args:
+            inputs (list[Tensor]): List of multi-level img features.
+            img_metas (list[dict]): List of image info dict where each dict
+                has: 'img_shape', 'scale_factor', 'flip', and may also contain
+                'filename', 'ori_shape', 'pad_shape', and 'img_norm_cfg'.
+                For details on the values of these keys see
+                `mmseg/datasets/pipelines/formatting.py:Collect`.
+            test_cfg (dict): The testing config.
+
+        Returns:
+            Tensor: Output segmentation map.
+        """
+        if depth is not None:
+            print(depth.shape)
+            print('get depth map successfully in test')
+        return self.forward(inputs)
 
     def forward(self, inputs, return_intermedia=False):
         layer0, layer1, layer2, layer3, layer4 = inputs
@@ -395,7 +418,8 @@ class MirrorNet(BaseDecodeHead):
         layer4_predict = self.layer4_predict(cbam_4)
 
         if layer4_predict.size(1) > 1:
-            layer4_map = torch.sum(layer4_predict[:, 1:, ...], dim=1, keepdim=True)
+            layer4_map = torch.sum(
+                layer4_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer4_map = layer4_predict
         layer4_map = F.sigmoid(layer4_map)
@@ -406,7 +430,8 @@ class MirrorNet(BaseDecodeHead):
         layer3_predict = self.layer3_predict(cbam_3)
 
         if layer3_predict.size(1) > 1:
-            layer3_map = torch.sum(layer3_predict[:, 1:, ...], dim=1, keepdim=True)
+            layer3_map = torch.sum(
+                layer3_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer3_map = layer3_predict
         layer3_map = F.sigmoid(layer3_map)
@@ -417,7 +442,8 @@ class MirrorNet(BaseDecodeHead):
         layer2_predict = self.layer2_predict(cbam_2)
 
         if layer2_predict.size(1) > 1:
-            layer2_map = torch.sum(layer2_predict[:, 1:, ...], dim=1, keepdim=True)
+            layer2_map = torch.sum(
+                layer2_predict[:, 1:, ...], dim=1, keepdim=True)
         else:
             layer2_map = layer2_predict
         layer2_map = F.sigmoid(layer2_map)

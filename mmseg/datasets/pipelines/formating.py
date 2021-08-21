@@ -209,6 +209,9 @@ class DefaultFormatBundle(object):
                 to_tensor(results['gt_semantic_seg'][None,
                                                      ...].astype(np.int64)),
                 stack=True)
+        if 'depth_map' in results:
+            results['depth_map'] = DC(
+                to_tensor(results['depth_map'][None, ...]), stack=True)
         return results
 
     def __repr__(self):

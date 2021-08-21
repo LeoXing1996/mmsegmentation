@@ -3,11 +3,17 @@ import os.path as osp
 import tempfile
 
 import mmcv
+
+from mmcv.utils import print_log
+from mmcv.utils import mkdir_or_exist
+from mmseg.utils import get_root_logger
 import numpy as np
 from PIL import Image
 
 from .builder import DATASETS
 from .custom import CustomDataset
+
+import cv2
 
 
 @DATASETS.register_module()
@@ -23,16 +29,21 @@ class MirrorDataset(CustomDataset):
     CLASSES = ('background', 'trans', 'mirror')
 
     PALETTE = [[6, 230, 230], [120, 120, 120], [180, 120, 120]]
+    DEPTH_COLOR_MAP = cv2.COLORMAP_JET
 
-    def __init__(self, only_mirror=False, **kwargs):
+    def __init__(self, depth_dir=None, depth_suffix='.png', **kwargs):
         super(MirrorDataset, self).__init__(
             img_suffix='.jpg',
             seg_map_suffix='.png',
             reduce_zero_label=False,
             **kwargs)
-        if only_mirror:
-            self.CLASSES = ('mirror')
-            self.PALETTE = [[6, 230, 230]]
+
+        self.depth_dir = depth_dir
+        if self.data_root is not None:
+            if not osp.isabs(self.depth_dir):
+                self.depth_dir = osp.join(self.data_root, self.depth_dir)
+        self.depth_suffix = depth_suffix
+        self.update_depth_to_img_infos(self.depth_dir, self.depth_suffix)
 
     def results2img(self, results, imgfile_prefix, to_label_id):
         """Write the segmentation results to images.
@@ -105,3 +116,117 @@ class MirrorDataset(CustomDataset):
 
         result_files = self.results2img(results, imgfile_prefix, to_label_id)
         return result_files, tmp_dir
+
+    def update_depth_to_img_infos(self, depth_dir, depth_suffix):
+        if depth_dir is None:
+            return
+        for img_info in self.img_infos:
+            img_name = img_info['filename'].split('.')[0]
+            depth_map = img_name + depth_suffix
+            img_info['depth'] = dict(depth_map=depth_map)
+
+    def get_depth_info(self, idx):
+        if 'depth' in self.img_infos[idx]:
+            return self.img_infos[idx]['depth']
+        return None
+
+    def prepare_train_img(self, idx):
+        img_info = self.img_infos[idx]
+        ann_info = self.get_ann_info(idx)
+        results = dict(img_info=img_info, ann_info=ann_info)
+
+        depth_info = self.get_depth_info(idx)
+        if depth_info:
+            results['depth_info'] = depth_info
+        self.pre_pipeline(results)
+        return self.pipeline(results)
+
+    def prepare_test_img(self, idx):
+        img_info = self.img_infos[idx]
+        results = dict(img_info=img_info)
+        depth_info = self.get_depth_info(idx)
+        if depth_info:
+            results['depth_info'] = depth_info
+        self.pre_pipeline(results)
+        return self.pipeline(results)
+
+    def pre_pipeline(self, results):
+        results['seg_fields'] = []
+        results['img_prefix'] = self.img_dir
+        results['seg_prefix'] = self.ann_dir
+        if self.custom_classes:
+            results['label_map'] = self.label_map
+        if self.depth_dir:
+            results['depth_fields'] = []
+            results['depth_prefix'] = self.depth_dir
+
+    def vis_results(self, runner, results, vis_cfg=None):
+        current = runner.iter
+        save_path = osp.join(runner.work_dir, 'sample', f'iter_{current}')
+        mkdir_or_exist(save_path)
+
+        vis_depth = vis_cfg.get('vis_depth', False) if vis_cfg else False
+        max_num = vis_cfg.get('max_num', -1) if vis_cfg else -1
+        vis_idx = [idx for idx in range(len(self.img_infos))]
+        if max_num != -1:
+            import random
+            random.shuffle(vis_idx)
+            vis_idx = vis_idx[:max_num]
+
+        if vis_depth:
+            assert hasattr(
+                self, 'depth_dir'
+            ), '`depth_dir` is must for depth image visualization.'
+
+        print_log(f'Save {max_num} results, please wait...')
+        for idx in vis_idx:
+            img_info = self.img_infos[idx]
+            pred_seg_map = results[idx]
+
+            gt_seg_map = osp.join(self.ann_dir, img_info['ann']['seg_map'])
+            img = osp.join(self.img_dir, img_info['filename'])
+
+            img_np = np.array(Image.open(img))
+            gt_seg_np = np.array(Image.open(gt_seg_map))
+
+            color_gt_seg = np.zeros(
+                (gt_seg_np.shape[0], gt_seg_np.shape[1], 3))
+            color_pred_seg = np.zeros(
+                (pred_seg_map.shape[0], pred_seg_map.shape[1], 3))
+
+            for label, color in enumerate(self.PALETTE):
+                color_gt_seg[gt_seg_np == label, :] = color
+                color_pred_seg[pred_seg_map == label, :] = color
+
+            color_pred_seg = mmcv.imresize(
+                color_pred_seg, (color_gt_seg.shape[1], color_gt_seg.shape[0]))
+
+            if vis_depth:
+                # IMG | DEPTH
+                # GT  | PRED
+                depth_map = osp.join(self.depth_dir,
+                                     img_info['depth']['depth_map'])
+
+                # depth_np = np.array(Image.open(depth_map))[..., None]
+                # depth_np = np.concatenate([depth_np, depth_np, depth_np],
+                #                           axis=2).astype(np.uint8)
+                depth_np = cv2.imread(depth_map)
+                color_depth = cv2.applyColorMap(
+                    cv2.convertScaleAbs(depth_np, alpha=15),
+                    self.DEPTH_COLOR_MAP)
+                inp_vis_res = np.concatenate([img_np, color_depth], axis=1)
+                out_vis_res = np.concatenate([color_gt_seg, color_pred_seg],
+                                             axis=1)
+                vis_res = np.concatenate([inp_vis_res, out_vis_res],
+                                         axis=0).astype(np.uint8)
+            else:
+                # IMG | GT | PRED
+                vis_res = np.concatenate(
+                    [img_np, color_gt_seg, color_pred_seg],
+                    axis=1).astype(np.uint8)
+            img_name = img_info['filename'].split('.')[0]
+            Image.fromarray(vis_res).save(
+                osp.join(save_path, f'{img_name}.png'))
+            # vis_list.append(dict(img=vis_res, name=img_info['filename']))
+
+        print_log('Save finished.')
