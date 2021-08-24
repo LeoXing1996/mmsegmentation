@@ -21,7 +21,8 @@ from .sep_aspp_head import DepthwiseSeparableASPPHead
 from .sep_fcn_head import DepthwiseSeparableFCNHead
 from .setr_mla_head import SETRMLAHead
 from .setr_up_head import SETRUPHead
-from .uper_head import UPerHead
+from .uper_head import UPerHead, UPerRGBDHead
+# from .uper_rgbd_head import UPerRGBDHead
 from .mirror_net_head import MirrorNet
 
 __all__ = [
@@ -29,5 +30,5 @@ __all__ = [
     'UPerHead', 'DepthwiseSeparableASPPHead', 'ANNHead', 'DAHead', 'OCRHead',
     'EncHead', 'DepthwiseSeparableFCNHead', 'FPNHead', 'EMAHead', 'DNLHead',
     'PointHead', 'APCHead', 'DMHead', 'LRASPPHead', 'SETRUPHead',
-    'SETRMLAHead', 'SegformerHead', 'MirrorNet'
+    'SETRMLAHead', 'SegformerHead', 'MirrorNet', 'UPerRGBDHead'
 ]

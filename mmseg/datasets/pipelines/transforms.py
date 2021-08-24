@@ -496,8 +496,8 @@ class NormalizeDepth(object):
         if 'depth_map' not in results:
             return results
 
-        results['depth_map'] = mmcv.imnormalize(results['depth_map'],
-                                                self.mean, self.std)
+        results['depth_map'] = mmcv.imnormalize(
+            results['depth_map'], self.mean, self.std, to_rgb=False)
         results['depth_norm_cfg'] = dict(mean=self.mean, std=self.std)
         return results
 
